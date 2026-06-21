@@ -3,8 +3,9 @@ import { prisma } from "@/lib/prisma";
 
 export async function DELETE(
   _req: Request,
-  { params }: { params: { id: string } }
+  { params }: { params: Promise<{ id: string }> }
 ) {
-  await prisma.stock.delete({ where: { id: Number(params.id) } });
+  const { id } = await params;  // ← await params in Next.js 15
+  await prisma.stock.delete({ where: { id: Number(id) } });
   return NextResponse.json({ success: true });
 }

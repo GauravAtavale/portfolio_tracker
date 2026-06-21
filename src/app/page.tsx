@@ -47,6 +47,8 @@ export default function Home() {
   useEffect(() => {
     setMounted(true);
     fetchPortfolio();
+    const interval = setInterval(fetchPortfolio, 30_000); // refresh every 30s
+    return () => clearInterval(interval); // stop when page closes
   }, [fetchPortfolio]);
 
   async function addStock(e: React.FormEvent) {

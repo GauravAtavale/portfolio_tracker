@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
-import yahooFinance from "yahoo-finance2";
+import yahooFinance from "@/lib/yahooFinance";
 
 export async function GET() {
   const stocks = await prisma.stock.findMany();
@@ -8,14 +8,15 @@ export async function GET() {
   const enriched = await Promise.all(
     stocks.map(async (s) => {
       try {
-        const quote = await yahooFinance.quote(s.symbol);
-        const currentPrice = quote.regularMarketPrice ?? 0;
-        const currentValue = currentPrice * s.quantity;
+        const quote = await yahooFinance.quote(s.symbol, {}, { validateResult: false });
+        const currentPrice = quote.regularMarketPrice ?? null;
+        const currentValue = currentPrice != null ? currentPrice * s.quantity : null;
         const costBasis = s.avgCost * s.quantity;
-        const gainLoss = currentValue - costBasis;
-        const gainLossPct = costBasis > 0 ? (gainLoss / costBasis) * 100 : 0;
+        const gainLoss = currentValue != null ? currentValue - costBasis : null;
+        const gainLossPct = gainLoss != null && costBasis > 0 ? (gainLoss / costBasis) * 100 : null;
         return { ...s, currentPrice, currentValue, costBasis, gainLoss, gainLossPct };
-      } catch {
+      } catch (err) {
+        console.error(`[Yahoo Finance] Failed to fetch ${s.symbol}:`, err);
         return {
           ...s,
           currentPrice: null,
