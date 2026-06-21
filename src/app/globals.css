@@ -1,0 +1,41 @@
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+  font-family: system-ui, -apple-system, sans-serif;
+  background: #0f0f0f;
+  color: #e5e5e5;
+  padding: 2rem;
+  min-height: 100vh;
+}
+h1 { font-size: 1.8rem; font-weight: 700; margin-bottom: 0.5rem; }
+table { width: 100%; border-collapse: collapse; margin-top: 1.5rem; }
+th, td { padding: 0.75rem 1rem; border-bottom: 1px solid #2a2a2a; text-align: left; }
+th { color: #888; font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.05em; }
+.positive { color: #4ade80; }
+.negative { color: #f87171; }
+input {
+  background: #1a1a1a;
+  border: 1px solid #333;
+  color: #e5e5e5;
+  padding: 0.5rem 0.75rem;
+  border-radius: 6px;
+  font-size: 0.95rem;
+}
+input:focus { outline: 2px solid #3b82f6; outline-offset: 2px; }
+button { padding: 0.5rem 1.2rem; border-radius: 6px; border: none; cursor: pointer; font-weight: 600; font-size: 0.9rem; }
+.btn-primary { background: #3b82f6; color: white; }
+.btn-primary:hover { background: #2563eb; }
+.btn-primary:disabled { opacity: 0.5; cursor: not-allowed; }
+.btn-danger { background: transparent; color: #f87171; border: 1px solid #f87171; padding: 0.25rem 0.6rem; font-size: 0.8rem; }
+.btn-danger:hover { background: #f871711a; }
+.card {
+  background: #1a1a1a;
+  border-radius: 12px;
+  padding: 1.5rem;
+  margin-bottom: 1rem;
+  border: 1px solid #2a2a2a;
+}
+.net-worth { font-size: 2.5rem; font-weight: 700; color: #3b82f6; margin: 0.25rem 0; }
+.subtitle { color: #888; font-size: 0.95rem; margin-top: 0.5rem; }
+form { display: flex; gap: 0.75rem; flex-wrap: wrap; align-items: flex-end; margin-top: 1.5rem; }
+label { display: flex; flex-direction: column; gap: 0.3rem; font-size: 0.85rem; color: #888; }
+.empty { margin-top: 2rem; color: #555; text-align: center; padding: 3rem; }
