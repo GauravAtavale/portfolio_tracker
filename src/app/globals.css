@@ -6,10 +6,11 @@ body {
   padding: 2rem;
   min-height: 100vh;
 }
-h1 { font-size: 1.8rem; font-weight: 700; margin-bottom: 0.5rem; }
+h1 { font-size: 1.8rem; font-weight: 700; margin-bottom: 0.25rem; }
 table { width: 100%; border-collapse: collapse; margin-top: 1.5rem; }
 th, td { padding: 0.75rem 1rem; border-bottom: 1px solid #2a2a2a; text-align: left; }
 th { color: #888; font-size: 0.8rem; text-transform: uppercase; letter-spacing: 0.05em; }
+tr:hover > td { background: #1a1a1a; }
 .positive { color: #4ade80; }
 .negative { color: #f87171; }
 input {
@@ -22,11 +23,13 @@ input {
 }
 input:focus { outline: 2px solid #3b82f6; outline-offset: 2px; }
 button { padding: 0.5rem 1.2rem; border-radius: 6px; border: none; cursor: pointer; font-weight: 600; font-size: 0.9rem; }
-.btn-primary { background: #3b82f6; color: white; }
+.btn-primary { background: #3b82f6; color: white; transition: background 0.15s; }
 .btn-primary:hover { background: #2563eb; }
 .btn-primary:disabled { opacity: 0.5; cursor: not-allowed; }
 .btn-danger { background: transparent; color: #f87171; border: 1px solid #f87171; padding: 0.25rem 0.6rem; font-size: 0.8rem; }
 .btn-danger:hover { background: #f871711a; }
+.btn-edit { background: transparent; color: #facc15; border: 1px solid #facc15; padding: 0.25rem 0.6rem; font-size: 0.8rem; border-radius: 6px; cursor: pointer; }
+.btn-edit:hover { background: #facc151a; }
 .card {
   background: #1a1a1a;
   border-radius: 12px;
@@ -39,3 +42,31 @@ button { padding: 0.5rem 1.2rem; border-radius: 6px; border: none; cursor: point
 form { display: flex; gap: 0.75rem; flex-wrap: wrap; align-items: flex-end; margin-top: 1.5rem; }
 label { display: flex; flex-direction: column; gap: 0.3rem; font-size: 0.85rem; color: #888; }
 .empty { margin-top: 2rem; color: #555; text-align: center; padding: 3rem; }
+
+/* Detail card */
+.detail-card {
+  background: #111;
+  border-top: 1px solid #2a2a2a;
+  padding: 1.25rem 1.5rem;
+}
+.detail-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+  gap: 1rem;
+}
+.detail-item {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+.detail-label {
+  font-size: 0.75rem;
+  color: #666;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+.detail-value {
+  font-size: 1rem;
+  font-weight: 600;
+  color: #e5e5e5;
+}

@@ -14,7 +14,22 @@ export async function GET() {
         const costBasis = s.avgCost * s.quantity;
         const gainLoss = currentValue != null ? currentValue - costBasis : null;
         const gainLossPct = gainLoss != null && costBasis > 0 ? (gainLoss / costBasis) * 100 : null;
-        return { ...s, currentPrice, currentValue, costBasis, gainLoss, gainLossPct };
+        return {
+          ...s,
+          currentPrice,
+          currentValue,
+          costBasis,
+          gainLoss,
+          gainLossPct,
+          // Extra fields for detail card
+          regularMarketDayHigh: quote.regularMarketDayHigh ?? null,
+          regularMarketDayLow: quote.regularMarketDayLow ?? null,
+          fiftyTwoWeekHigh: quote.fiftyTwoWeekHigh ?? null,
+          fiftyTwoWeekLow: quote.fiftyTwoWeekLow ?? null,
+          regularMarketPreviousClose: quote.regularMarketPreviousClose ?? null,
+          marketCap: quote.marketCap ?? null,
+          regularMarketChangePercent: quote.regularMarketChangePercent ?? null,
+        };
       } catch (err) {
         console.error(`[Yahoo Finance] Failed to fetch ${s.symbol}:`, err);
         return {
@@ -24,6 +39,13 @@ export async function GET() {
           costBasis: s.avgCost * s.quantity,
           gainLoss: null,
           gainLossPct: null,
+          regularMarketDayHigh: null,
+          regularMarketDayLow: null,
+          fiftyTwoWeekHigh: null,
+          fiftyTwoWeekLow: null,
+          regularMarketPreviousClose: null,
+          marketCap: null,
+          regularMarketChangePercent: null,
         };
       }
     })
