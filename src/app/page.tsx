@@ -31,7 +31,8 @@ export default function Home() {
   const [quantity, setQuantity] = useState("");
   const [avgCost, setAvgCost] = useState("");
   const [loading, setLoading] = useState(false);
-  const [fetching, setFetching] = useState(true);
+  const [fetching, setFetching] = useState(false);
+  const [mounted, setMounted] = useState(false);
 
   const fetchPortfolio = useCallback(async () => {
     setFetching(true);
@@ -43,7 +44,10 @@ export default function Home() {
     }
   }, []);
 
-  useEffect(() => { fetchPortfolio(); }, [fetchPortfolio]);
+  useEffect(() => {
+    setMounted(true);
+    fetchPortfolio();
+  }, [fetchPortfolio]);
 
   async function addStock(e: React.FormEvent) {
     e.preventDefault();
@@ -66,6 +70,8 @@ export default function Home() {
   const gainColor = (v: number | null) =>
     v == null ? "" : v >= 0 ? "positive" : "negative";
 
+  if (!mounted) return null;
+
   return (
     <main>
       <h1>📈 Portfolio Tracker</h1>
@@ -78,7 +84,9 @@ export default function Home() {
           <p style={{ color: "#888", fontSize: "0.85rem", textTransform: "uppercase", letterSpacing: "0.05em" }}>
             Total Net Worth
           </p>
-          <p className="net-worth">{fetching ? "Updating…" : fmt(portfolio.totalValue)}</p>
+          <p className="net-worth">
+            {fetching ? "Updating…" : fmt(portfolio.totalValue)}
+          </p>
           <p className="subtitle">
             Cost Basis: {fmt(portfolio.totalCost)}&nbsp;&nbsp;|&nbsp;&nbsp;
             <span className={gainColor(portfolio.totalGainLoss)}>
@@ -124,12 +132,30 @@ export default function Home() {
             required
           />
         </label>
-        <button type="submit" className="btn-primary" disabled={loading} style={{ alignSelf: "flex-end" }}>
+        <button
+          type="submit"
+          className="btn-primary"
+          disabled={loading}
+          style={{ alignSelf: "flex-end" }}
+        >
           {loading ? "Adding…" : "Add / Update Stock"}
         </button>
       </form>
 
-      {portfolio?.stocks.length ? (
+      {fetching && !portfolio && (
+        <div className="empty"><p>Loading portfolio…</p></div>
+      )}
+
+      {!fetching && portfolio?.stocks.length === 0 && (
+        <div className="empty">
+          <p>No stocks yet.</p>
+          <p style={{ marginTop: "0.5rem", fontSize: "0.9rem" }}>
+            Add your first holding above ↑
+          </p>
+        </div>
+      )}
+
+      {portfolio && portfolio.stocks.length > 0 && (
         <table>
           <thead>
             <tr>
@@ -166,13 +192,6 @@ export default function Home() {
             ))}
           </tbody>
         </table>
-      ) : (
-        <div className="empty">
-          <p>No stocks yet.</p>
-          <p style={{ marginTop: "0.5rem", fontSize: "0.9rem" }}>
-            Add your first holding above ↑
-          </p>
-        </div>
       )}
     </main>
   );
