@@ -1,6 +1,13 @@
 "use client";
 import { useEffect, useState, useCallback, useRef, Fragment } from "react";
 
+<div style={{ display: "flex", justifyContent: "flex-end", marginBottom: "1rem" }}>
+  <a href="/scanner"
+    style={{ display: "inline-flex", alignItems: "center", gap: "0.4rem", padding: "0.4rem 1rem", background: "#0c1d30", color: "#3b82f6", border: "1px solid #1e3a5f", borderRadius: 8, fontSize: "0.82rem", fontWeight: 600, textDecoration: "none" }}>
+    📊 Scanner & Watchlist →
+  </a>
+</div>
+
 // ─── Types ───────────────────────────────────────────────────────────────────
 type StockRow = {
   id: number; symbol: string; quantity: number; avgCost: number;
