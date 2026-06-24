@@ -26,10 +26,10 @@ model WatchlistTicker {
 
 model AlertRule {
   id        Int             @id @default(autoincrement())
-  ticker    WatchlistTicker @relation(fields: [symbol], references: [symbol])
+  ticker    WatchlistTicker @relation(fields: [symbol], references: [symbol], onDelete: Cascade)
   symbol    String
-  condition String          // "drop", "spike", "volume", "52wLow", "gapDown"
-  threshold Float           // e.g. 5 for 5%, 2 for 2x volume
+  condition String
+  threshold Float
   enabled   Boolean         @default(true)
   createdAt DateTime        @default(now())
 }
