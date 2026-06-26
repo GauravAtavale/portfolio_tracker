@@ -33,3 +33,19 @@ model AlertRule {
   enabled   Boolean         @default(true)
   createdAt DateTime        @default(now())
 }
+
+model Simulation {
+  id           Int      @id @default(autoincrement())
+  symbol       String
+  entryDate    DateTime
+  shares       Float
+  entryPrice   Float
+  currentPrice Float
+  gainLossPct  Float
+  cagr         Float
+  daysHeld     Int
+  alpha        Float
+  tags         String   @default("[]")
+  note         String?
+  createdAt    DateTime @default(now())
+}
