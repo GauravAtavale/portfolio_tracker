@@ -322,4 +322,185 @@ export default function SimulatorPage() {
                 { l: "Worst Price",   v: fmt(result.worstPrice),    sub: fmtPct(((result.worstPrice - result.entryPrice) / result.entryPrice) * 100) + " from entry", c: "#f87171" },
               ].map((k) => (
                 <div key={k.l} style={kpi}>
-                  
+                  <div style={{ fontSize: "0.68rem", color: "#555", marginBottom: "0.25rem", textTransform: "uppercase", letterSpacing: "0.05em" }}>{k.l}</div>
+                  <div style={{ fontSize: "1.05rem", fontWeight: 700, color: k.c ?? "#e5e5e5", fontVariantNumeric: "tabular-nums" }}>{k.v}</div>
+                  <div style={{ fontSize: "0.68rem", color: "#555", marginTop: "0.15rem" }}>{k.sub}</div>
+                </div>
+              ))}
+            </div>
+
+            {/* Panel tabs */}
+            <div style={{ display: "flex", gap: "0.4rem", marginBottom: "0.75rem" }}>
+              {(["chart", "context", "snapshots"] as const).map((p) => (
+                <button key={p} style={tabBtn(activePanel === p)} onClick={() => setActivePanel(p)}>
+                  {p === "chart" ? "📈 Chart" : p === "context" ? "📰 Context Panel" : "📊 Timeline Snapshots"}
+                </button>
+              ))}
+            </div>
+
+            {/* Chart */}
+            {activePanel === "chart" && (
+              <div style={{ ...card, marginBottom: "1rem" }}>
+                <div style={{ fontSize: "0.82rem", color: "#888", marginBottom: "1rem" }}>
+                  Entry: <strong style={{ color: "#e5e5e5" }}>{result.actualEntryDate}</strong> · {result.symbol} vs SPY — same dollars invested
+                </div>
+                <DualChart data={result.chartData} symbol={result.symbol} />
+              </div>
+            )}
+
+            {/* Context */}
+            {activePanel === "context" && (
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0.875rem", marginBottom: "1rem" }}>
+                <div style={card}>
+                  <div style={{ fontWeight: 700, fontSize: "0.88rem", marginBottom: "0.875rem" }}>🌍 Market Environment at Entry</div>
+                  {[
+                    { l: "S&P 500 return (same period)",   v: fmtPct(result.marketContext.spyReturn),         c: clr(result.marketContext.spyReturn) },
+                    { l: "SPY volatility at entry week",   v: fmtPct(result.marketContext.spyVolatilityPct),  c: result.marketContext.spyVolatilityPct > 2 ? "#f87171" : "#4ade80" },
+                    { l: "Sector",                         v: result.marketContext.sector ?? "—",              c: "#e5e5e5" },
+                    { l: "Analyst consensus",              v: result.marketContext.recommendation ?? "—",      c: "#facc15" },
+                    { l: "Your alpha (outperformance)",    v: fmtPct(result.alpha),                            c: clr(result.alpha) },
+                  ].map((row) => (
+                    <div key={row.l} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "0.4rem 0", borderBottom: "1px solid #1a1a1a" }}>
+                      <span style={{ fontSize: "0.8rem", color: "#666" }}>{row.l}</span>
+                      <span style={{ fontSize: "0.85rem", fontWeight: 600, color: row.c }}>{row.v}</span>
+                    </div>
+                  ))}
+                </div>
+
+                <div style={card}>
+                  <div style={{ fontWeight: 700, fontSize: "0.88rem", marginBottom: "0.875rem" }}>📰 Recent News — {result.symbol}</div>
+                  {result.news.length === 0 && <p style={{ color: "#444", fontSize: "0.82rem" }}>No news available.</p>}
+                  <div style={{ display: "flex", flexDirection: "column", gap: "0.6rem", maxHeight: 360, overflowY: "auto" }}>
+                    {result.news.map((n, i) => (
+                      <a key={i} href={n.link} target="_blank" rel="noopener noreferrer"
+                        style={{ display: "flex", gap: "0.6rem", background: "#0f0f0f", border: "1px solid #1e1e1e", borderRadius: 8, padding: "0.6rem", textDecoration: "none", color: "inherit" }}>
+                        {n.thumbnail && <img src={n.thumbnail} alt="" width={60} height={40} style={{ objectFit: "cover", borderRadius: 4, flexShrink: 0 }} loading="lazy" />}
+                        <div>
+                          <div style={{ fontSize: "0.8rem", color: "#ccc", lineHeight: 1.45, fontWeight: 500 }}>{n.title}</div>
+                          <div style={{ display: "flex", gap: "0.6rem", marginTop: "0.3rem" }}>
+                            <span style={{ fontSize: "0.7rem", color: "#3b82f6", fontWeight: 600 }}>{n.publisher}</span>
+                            <span style={{ fontSize: "0.7rem", color: "#444" }}>{n.publishedAt ? timeAgo(n.publishedAt) : ""}</span>
+                          </div>
+                        </div>
+                      </a>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* Snapshots */}
+            {activePanel === "snapshots" && (
+              <div style={{ ...card, marginBottom: "1rem" }}>
+                <div style={{ fontWeight: 700, fontSize: "0.88rem", marginBottom: "1rem" }}>📊 Value at Key Intervals from Entry</div>
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(190px, 1fr))", gap: "0.75rem" }}>
+                  {[
+                    { label: "Entry Day", snap: { price: result.entryPrice,   value: result.costBasis,    date: result.actualEntryDate } },
+                    { label: "+7 Days",   snap: result.snapshots.d7  },
+                    { label: "+30 Days",  snap: result.snapshots.d30 },
+                    { label: "+90 Days",  snap: result.snapshots.d90 },
+                    { label: "Today",     snap: { price: result.currentPrice, value: result.currentValue, date: "now" } },
+                  ].map(({ label: lbl, snap }) => {
+                    if (!snap) return (
+                      <div key={lbl} style={{ ...kpi, opacity: 0.4 }}>
+                        <div style={{ fontSize: "0.72rem", color: "#555", marginBottom: 4 }}>{lbl}</div>
+                        <div style={{ fontSize: "0.8rem", color: "#444" }}>Not yet reached</div>
+                      </div>
+                    );
+                    const gl = snap.value - result.costBasis;
+                    return (
+                      <div key={lbl} style={{ ...kpi, borderColor: gl >= 0 ? "#1a3a1a" : "#3a1a1a" }}>
+                        <div style={{ fontSize: "0.72rem", color: "#555", marginBottom: 4, textTransform: "uppercase", letterSpacing: "0.04em" }}>{lbl}</div>
+                        <div style={{ fontSize: "1.1rem", fontWeight: 700, color: clr(gl), fontVariantNumeric: "tabular-nums" }}>{fmt(snap.value)}</div>
+                        <div style={{ fontSize: "0.75rem", color: "#555", marginTop: 2 }}>@ {fmt(snap.price)} · {snap.date}</div>
+                        <div style={{ fontSize: "0.78rem", color: clr(gl), fontWeight: 600, marginTop: 4 }}>
+                          {gl >= 0 ? "+" : ""}{fmt(gl)} ({fmtPct((gl / result.costBasis) * 100)})
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+
+            {/* Save & Tag */}
+            <div style={{ ...card, borderColor: savedMsg ? "#166534" : "#1e1e1e" }}>
+              <div style={{ fontWeight: 700, fontSize: "0.88rem", marginBottom: "0.5rem" }}>💾 Save to Pattern Library</div>
+              <div style={{ fontSize: "0.78rem", color: "#555", marginBottom: "0.875rem" }}>Tag this simulation to build your personal prediction database</div>
+              <div style={{ marginBottom: "0.875rem" }}>
+                <div style={{ ...label, marginBottom: "0.4rem" }}>Context Tags</div>
+                <div style={{ display: "flex", flexWrap: "wrap", gap: "0.375rem" }}>
+                  {TAGS.map((tag) => (
+                    <button key={tag} type="button" onClick={() => toggleTag(tag)}
+                      style={{ fontSize: "0.75rem", padding: "4px 10px", borderRadius: 20, cursor: "pointer",
+                        border: `1px solid ${selectedTags.includes(tag) ? "#3b82f6" : "#2a2a2a"}`,
+                        background: selectedTags.includes(tag) ? "#1e3a5f" : "transparent",
+                        color: selectedTags.includes(tag) ? "#3b82f6" : "#666" }}>
+                      {tag}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <div style={{ marginBottom: "0.875rem" }}>
+                <div style={label}>Note / Observation</div>
+                <textarea value={note} onChange={(e) => setNote(e.target.value)}
+                  placeholder="e.g. Dropped on supply concern headline, analyst targets unchanged, recovered in 12 days…"
+                  style={{ ...input, resize: "vertical", minHeight: 72, lineHeight: 1.5 } as React.CSSProperties} />
+              </div>
+              <button onClick={saveSimulation} disabled={saving || savedMsg}
+                style={{ background: savedMsg ? "#166534" : "#1e3a5f", color: savedMsg ? "#4ade80" : "#3b82f6",
+                  border: `1px solid ${savedMsg ? "#166534" : "#3b82f6"}`, borderRadius: 8,
+                  padding: "0.45rem 1.25rem", fontSize: "0.85rem", fontWeight: 700, cursor: "pointer" }}>
+                {savedMsg ? "✅ Saved!" : saving ? "Saving…" : "Save Simulation"}
+              </button>
+            </div>
+          </>
+        )}
+
+        {/* ── SAVED SIMULATIONS ───────────────────────────────────────── */}
+        {showSaved && (
+          <div style={{ marginTop: "1.5rem" }}>
+            <div style={{ fontWeight: 700, fontSize: "1rem", marginBottom: "0.875rem" }}>📋 Saved Simulations ({saved.length})</div>
+            {saved.length === 0 && <p style={{ color: "#444", fontSize: "0.85rem" }}>No saved simulations yet.</p>}
+            <div style={{ display: "flex", flexDirection: "column", gap: "0.6rem" }}>
+              {saved.map((sim) => (
+                <div key={sim.id} style={{ ...card, display: "flex", alignItems: "flex-start", gap: "1rem", flexWrap: "wrap" }}>
+                  <div style={{ minWidth: 80 }}>
+                    <div style={{ fontWeight: 700, fontFamily: "monospace", fontSize: "1rem" }}>{sim.symbol}</div>
+                    <div style={{ fontSize: "0.72rem", color: "#555" }}>{new Date(sim.entryDate).toLocaleDateString()}</div>
+                    <div style={{ fontSize: "0.72rem", color: "#555" }}>{sim.shares} shares</div>
+                  </div>
+                  <div style={{ flex: 1, display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(100px, 1fr))", gap: "0.5rem" }}>
+                    {[
+                      { l: "P&L",      v: fmtPct(sim.gainLossPct), c: clr(sim.gainLossPct) },
+                      { l: "CAGR",     v: fmtPct(sim.cagr),        c: clr(sim.cagr) },
+                      { l: "α vs SPY", v: fmtPct(sim.alpha),       c: clr(sim.alpha) },
+                      { l: "Days",     v: String(sim.daysHeld),     c: "#888" },
+                    ].map((k) => (
+                      <div key={k.l}>
+                        <div style={{ fontSize: "0.65rem", color: "#444", textTransform: "uppercase" }}>{k.l}</div>
+                        <div style={{ fontSize: "0.88rem", fontWeight: 600, color: k.c }}>{k.v}</div>
+                      </div>
+                    ))}
+                  </div>
+                  <div style={{ flex: 2 }}>
+                    {sim.tags.length > 0 && (
+                      <div style={{ display: "flex", flexWrap: "wrap", gap: "0.3rem", marginBottom: "0.4rem" }}>
+                        {sim.tags.map((t) => (
+                          <span key={t} style={{ fontSize: "0.68rem", padding: "2px 7px", borderRadius: 20, background: "#1e3a5f", color: "#3b82f6" }}>{t}</span>
+                        ))}
+                      </div>
+                    )}
+                    {sim.note && <p style={{ fontSize: "0.78rem", color: "#555", fontStyle: "italic" }}>{sim.note}</p>}
+                  </div>
+                  <button onClick={() => deleteSaved(sim.id)}
+                    style={{ fontSize: "0.72rem", padding: "3px 8px", borderRadius: 6, border: "1px solid #2a2a2a", background: "transparent", color: "#555", cursor: "pointer", flexShrink: 0 }}>✕</button>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}

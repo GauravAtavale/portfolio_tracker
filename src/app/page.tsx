@@ -1,506 +1,569 @@
 "use client";
-import { useEffect, useState } from "react";
+import { useEffect, useState, useCallback, useRef, Fragment } from "react";
 
-// ─── Types ────────────────────────────────────────────────────────────────────
-type ChartPoint = { date: string; portfolioValue: number; spyValue: number; stockPrice: number };
-type Snapshot   = { price: number; value: number; date: string } | null;
-type NewsItem   = { title: string; link: string; publisher: string; publishedAt: string | number; thumbnail: string | null };
-
-type SimResult = {
-  symbol: string; shares: number; actualEntryDate: string;
-  entryPrice: number; currentPrice: number; costBasis: number;
-  currentValue: number; gainLoss: number; gainLossPct: number;
-  cagr: number; daysHeld: number; spyReturn: number; alpha: number;
-  maxDrawdown: number; bestPrice: number; worstPrice: number;
-  snapshots: { d7: Snapshot; d30: Snapshot; d90: Snapshot };
-  chartData: ChartPoint[];
-  news: NewsItem[];
-  marketContext: { spyReturn: number; spyVolatilityPct: number; sector: string | null; recommendation: string | null };
+// ─── Types ───────────────────────────────────────────────────────────────────
+type StockRow = {
+  id: number; symbol: string; quantity: number; avgCost: number;
+  currentPrice: number | null; currentValue: number | null; costBasis: number;
+  gainLoss: number | null; gainLossPct: number | null;
+  regularMarketDayHigh?: number; regularMarketDayLow?: number;
+  fiftyTwoWeekHigh?: number; fiftyTwoWeekLow?: number;
+  regularMarketPreviousClose?: number; marketCap?: number;
+  regularMarketChangePercent?: number;
+};
+type Portfolio = { stocks: StockRow[]; totalValue: number; totalCost: number; totalGainLoss: number; };
+type NewsItem = { title: string; link: string; publisher: string; publishedAt: string | number; thumbnail: string | null; };
+type ChartPoint = { date: string; close: number; };
+type EarningsTrendItem = {
+  period?: string; growth?: number;
+  earningsEstimate?: { avg?: number; low?: number; high?: number; numberOfAnalysts?: number };
+  revenueEstimate?: { avg?: number; low?: number; high?: number };
+};
+type InsiderHolder = {
+  name?: string; relation?: string; transactionDescription?: string;
+  latestTransDate?: string; positionDirectDate?: string; shares?: number;
+};
+type InstitutionHolder = {
+  organization?: string; reportDate?: string; position?: number; value?: number; pctHeld?: number;
+};
+type UpgradeItem = {
+  firm?: string; toGrade?: string; fromGrade?: string; action?: string; epochGradeDate?: number;
+};
+type SummaryData = {
+  financialData?: {
+    targetMeanPrice?: number; targetHighPrice?: number; targetLowPrice?: number;
+    recommendationKey?: string; numberOfAnalystOpinions?: number;
+    revenueGrowth?: number; profitMargins?: number; debtToEquity?: number;
+  };
+  defaultKeyStatistics?: {
+    trailingEps?: number; forwardPE?: number; shortPercentOfFloat?: number;
+    heldPercentInsiders?: number; heldPercentInstitutions?: number;
+  };
+  summaryDetail?: { trailingPE?: number; forwardPE?: number; dividendYield?: number; };
+  assetProfile?: {
+    longBusinessSummary?: string; sector?: string; industry?: string;
+    fullTimeEmployees?: number; website?: string; city?: string; state?: string; country?: string;
+  };
+  calendarEvents?: { earnings?: { earningsDate?: (Date | string)[] } };
+  earningsTrend?: { trend?: EarningsTrendItem[] };
+  insiderHolders?: { holders?: InsiderHolder[] };
+  institutionOwnership?: { ownershipList?: InstitutionHolder[] };
+  majorHoldersBreakdown?: {
+    insidersPercentHeld?: number; institutionsPercentHeld?: number; institutionsCount?: number;
+  };
+  upgradeDowngradeHistory?: { history?: UpgradeItem[] };
 };
 
-type SavedSim = {
-  id: number; symbol: string; entryDate: string; shares: number;
-  entryPrice: number; currentPrice: number; gainLossPct: number;
-  cagr: number; daysHeld: number; alpha: number;
-  tags: string[]; note: string | null; createdAt: string;
+// ─── Formatters ───────────────────────────────────────────────────────────────
+const fmt = (n: number | null | undefined, prefix = "$") =>
+  n == null ? "—" : `${prefix}${n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+const fmtCompact = (n: number | null | undefined) => {
+  if (n == null) return "—";
+  if (n >= 1_000_000_000) return `$${(n / 1_000_000_000).toFixed(2)}B`;
+  if (n >= 1_000_000) return `$${(n / 1_000_000).toFixed(2)}M`;
+  return fmt(n);
 };
-
-const TAGS = [
-  "Earnings Miss", "Earnings Beat", "Macro Selloff", "Regulatory News",
-  "Product Launch", "Analyst Downgrade", "Analyst Upgrade", "Insider Selling",
-  "Sector Rotation", "One-Time Event", "Recoverable", "Fundamental Damage",
-];
-
-// ─── Formatters ──────────────────────────────────────────────────────────────
-const fmt    = (n: number | null | undefined) =>
-  n == null ? "—" : `$${n.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
-const fmtPct = (n: number | null | undefined, sign = true) =>
-  n == null ? "—" : `${sign && n > 0 ? "+" : ""}${n.toFixed(2)}%`;
-const clr    = (n: number | null | undefined) =>
-  n == null ? "#888" : n >= 0 ? "#4ade80" : "#f87171";
-const timeAgo = (ts: string | number) => {
+const fmtPct = (n: number | null | undefined) => n == null ? "—" : `${(n * 100).toFixed(1)}%`;
+const timeAgo = (ts: string | number | null) => {
+  if (!ts) return "";
   const diff = Math.floor((Date.now() - new Date(ts).getTime()) / 1000);
-  if (diff < 3600)  return `${Math.floor(diff / 60)}m ago`;
+  if (diff < 3600) return `${Math.floor(diff / 60)}m ago`;
   if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`;
   return `${Math.floor(diff / 86400)}d ago`;
 };
+const daysUntil = (d: Date | string) => Math.ceil((new Date(d).getTime() - Date.now()) / 86400000);
+const fmtDate = (d?: string | number | null) =>
+  !d ? "—" : new Date(typeof d === "number" && d < 1e12 ? d * 1000 : d)
+    .toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
 
-// ─── Dual-line SVG Chart ──────────────────────────────────────────────────────
-function DualChart({ data, symbol }: { data: ChartPoint[]; symbol: string }) {
-  const [tooltip, setTooltip] = useState<{ x: number; idx: number } | null>(null);
-  if (!data.length) return <p style={{ color: "#555", padding: "2rem 0", textAlign: "center" }}>No chart data.</p>;
-
-  const W = 700, H = 200, PAD = { top: 20, bottom: 32, left: 16, right: 16 };
-  const allVals = data.flatMap((d) => [d.portfolioValue, d.spyValue]);
-  const minV = Math.min(...allVals), maxV = Math.max(...allVals), range = maxV - minV || 1;
-  const xS = (i: number) => PAD.left + (i / (data.length - 1)) * (W - PAD.left - PAD.right);
-  const yS = (v: number) => PAD.top  + (1 - (v - minV) / range) * (H - PAD.top - PAD.bottom);
-
-  const stockPts = data.map((d, i) => `${xS(i)},${yS(d.portfolioValue)}`).join(" ");
-  const spyPts   = data.map((d, i) => `${xS(i)},${yS(d.spyValue)}`).join(" ");
-  const stockColor = data[data.length - 1].portfolioValue >= data[0].portfolioValue ? "#4ade80" : "#f87171";
-  const spyColor   = "#3b82f6";
-
-  const labelIdxs = [0, Math.floor(data.length / 4), Math.floor(data.length / 2), Math.floor(data.length * 3 / 4), data.length - 1];
-
+// ─── Sub-components ───────────────────────────────────────────────────────────
+function RangeBar({ low, high, current, color = "#3b82f6" }: { low: number; high: number; current: number; color?: string }) {
+  const pct = Math.min(100, Math.max(0, ((current - low) / (high - low)) * 100));
   return (
-    <div>
-      <div style={{ display: "flex", gap: "1.5rem", marginBottom: "0.75rem", flexWrap: "wrap" }}>
-        <div style={{ display: "flex", alignItems: "center", gap: "0.4rem" }}>
-          <div style={{ width: 12, height: 3, background: stockColor, borderRadius: 2 }} />
-          <span style={{ fontSize: "0.78rem", color: "#aaa" }}>{symbol} position value</span>
-        </div>
-        <div style={{ display: "flex", alignItems: "center", gap: "0.4rem" }}>
-          <div style={{ width: 12, height: 3, background: spyColor, borderRadius: 2, opacity: 0.7 }} />
-          <span style={{ fontSize: "0.78rem", color: "#aaa" }}>SPY (same $ invested)</span>
-        </div>
+    <div style={{ marginTop: "0.5rem" }}>
+      <div style={{ position: "relative", height: "6px", background: "#2a2a2a", borderRadius: "3px" }}>
+        <div style={{ position: "absolute", left: 0, width: `${pct}%`, height: "100%", background: color, borderRadius: "3px" }} />
+        <div style={{ position: "absolute", left: `${pct}%`, top: "-4px", width: "3px", height: "14px", background: "#fff", borderRadius: "2px", transform: "translateX(-50%)" }} />
       </div>
-      <div style={{ position: "relative" }}>
-        <svg
-          viewBox={`0 0 ${W} ${H}`}
-          style={{ width: "100%", height: "auto", display: "block" }}
-          onMouseMove={(e) => {
-            const rect = e.currentTarget.getBoundingClientRect();
-            const mx   = (e.clientX - rect.left) / rect.width * W;
-            const idx  = Math.min(data.length - 1, Math.max(0, Math.round((mx - PAD.left) / (W - PAD.left - PAD.right) * (data.length - 1))));
-            setTooltip({ x: xS(idx), idx });
-          }}
-          onMouseLeave={() => setTooltip(null)}
-        >
-          <defs>
-            <linearGradient id="sgFill" x1="0" y1="0" x2="0" y2="1">
-              <stop offset="0%"   stopColor={stockColor} stopOpacity="0.12" />
-              <stop offset="100%" stopColor={stockColor} stopOpacity="0" />
-            </linearGradient>
-          </defs>
-          <path
-            d={`M${xS(0)},${yS(data[0].portfolioValue)} ${data.map((d, i) => `L${xS(i)},${yS(d.portfolioValue)}`).join(" ")} L${xS(data.length - 1)},${H - PAD.bottom} L${xS(0)},${H - PAD.bottom} Z`}
-            fill="url(#sgFill)"
-          />
-          <polyline points={spyPts}   fill="none" stroke={spyColor}   strokeWidth="1.5" strokeDasharray="4,3" opacity="0.6" />
-          <polyline points={stockPts} fill="none" stroke={stockColor} strokeWidth="2"   strokeLinejoin="round" />
-          {tooltip && (
-            <>
-              <line x1={tooltip.x} y1={PAD.top} x2={tooltip.x} y2={H - PAD.bottom} stroke="#333" strokeWidth="1" strokeDasharray="3,3" />
-              <circle cx={tooltip.x} cy={yS(data[tooltip.idx].portfolioValue)} r="4" fill={stockColor} stroke="#111" strokeWidth="2" />
-              <circle cx={tooltip.x} cy={yS(data[tooltip.idx].spyValue)}       r="4" fill={spyColor}   stroke="#111" strokeWidth="2" />
-            </>
-          )}
-          {labelIdxs.map((i) => (
-            <text key={i} x={xS(i)} y={H - 4} textAnchor="middle" fontSize="10" fill="#444">
-              {data[i]?.date?.slice(5)}
-            </text>
-          ))}
-        </svg>
-        {tooltip && (() => {
-          const d    = data[tooltip.idx];
-          const left = tooltip.x > W * 0.6;
-          return (
-            <div style={{
-              position: "absolute", top: 8,
-              left:  left ? undefined : `${(tooltip.x / W) * 100 + 2}%`,
-              right: left ? `${((W - tooltip.x) / W) * 100 + 2}%` : undefined,
-              background: "#1a1a1a", border: "1px solid #333", borderRadius: 8,
-              padding: "0.5rem 0.75rem", fontSize: "0.78rem", pointerEvents: "none", minWidth: 160,
-            }}>
-              <div style={{ color: "#555", marginBottom: 4 }}>{d.date}</div>
-              <div style={{ display: "flex", justifyContent: "space-between", gap: "1rem" }}>
-                <span style={{ color: "#aaa" }}>{symbol}</span>
-                <span style={{ color: stockColor, fontWeight: 700 }}>{fmt(d.portfolioValue)}</span>
-              </div>
-              <div style={{ display: "flex", justifyContent: "space-between", gap: "1rem" }}>
-                <span style={{ color: "#aaa" }}>SPY</span>
-                <span style={{ color: spyColor, fontWeight: 700 }}>{fmt(d.spyValue)}</span>
-              </div>
-              <div style={{ color: "#444", fontSize: "0.7rem", marginTop: 4 }}>{symbol} price: {fmt(d.stockPrice)}</div>
-            </div>
-          );
-        })()}
+      <div style={{ display: "flex", justifyContent: "space-between", marginTop: "0.3rem", fontSize: "0.75rem", color: "#666" }}>
+        <span>{fmt(low)}</span><span style={{ color: "#aaa" }}>{fmt(current)}</span><span>{fmt(high)}</span>
       </div>
     </div>
   );
 }
 
-// ─── Main Page ────────────────────────────────────────────────────────────────
-export default function SimulatorPage() {
-  const [symbol,       setSymbol]       = useState("");
-  const [entryDate,    setEntryDate]    = useState("");
-  const [shares,       setShares]       = useState("10");
-  const [result,       setResult]       = useState<SimResult | null>(null);
-  const [loading,      setLoading]      = useState(false);
-  const [error,        setError]        = useState<string | null>(null);
-  const [selectedTags, setSelectedTags] = useState<string[]>([]);
-  const [note,         setNote]         = useState("");
-  const [saving,       setSaving]       = useState(false);
-  const [savedMsg,     setSavedMsg]     = useState(false);
-  const [saved,        setSaved]        = useState<SavedSim[]>([]);
-  const [showSaved,    setShowSaved]    = useState(false);
-  const [activePanel,  setActivePanel]  = useState<"chart" | "context" | "snapshots">("chart");
-  const [holdings,     setHoldings]     = useState<{ symbol: string; avgCost: number }[]>([]);
-
-  useEffect(() => {
-    fetch("/api/stocks").then((r) => r.json()).then(setHoldings).catch(() => {});
-    loadSaved();
-    const d = new Date(); d.setMonth(d.getMonth() - 6);
-    setEntryDate(d.toISOString().split("T")[0]);
-  }, []);
-
-  async function loadSaved() {
-    const r = await fetch("/api/simulator/saved");
-    if (r.ok) setSaved(await r.json());
-  }
-
-  async function runSimulation(e: React.FormEvent) {
-    e.preventDefault();
-    setLoading(true); setError(null); setResult(null); setSelectedTags([]); setNote("");
-    try {
-      const params = new URLSearchParams({ symbol, entryDate, shares });
-      const r = await fetch(`/api/simulator?${params}`);
-      const d = await r.json();
-      if (d.error) { setError(d.error); return; }
-      setResult(d);
-      setActivePanel("chart");
-    } catch {
-      setError("Failed to fetch simulation data.");
-    } finally {
-      setLoading(false);
-    }
-  }
-
-  async function saveSimulation() {
-    if (!result) return;
-    setSaving(true);
-    await fetch("/api/simulator", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        symbol: result.symbol, entryDate: result.actualEntryDate,
-        shares: result.shares, entryPrice: result.entryPrice,
-        currentPrice: result.currentPrice, gainLossPct: result.gainLossPct,
-        cagr: result.cagr, daysHeld: result.daysHeld, alpha: result.alpha,
-        tags: selectedTags, note,
-      }),
-    });
-    setSaving(false); setSavedMsg(true);
-    setTimeout(() => setSavedMsg(false), 3000);
-    loadSaved();
-  }
-
-  async function deleteSaved(id: number) {
-    await fetch("/api/simulator/saved", {
-      method: "DELETE", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ id }),
-    });
-    loadSaved();
-  }
-
-  const toggleTag = (tag: string) =>
-    setSelectedTags((p) => p.includes(tag) ? p.filter((t) => t !== tag) : [...p, tag]);
-
-  const card: React.CSSProperties  = { background: "#111", border: "1px solid #1e1e1e", borderRadius: 12, padding: "1.25rem" };
-  const label: React.CSSProperties = { fontSize: "0.75rem", color: "#666", textTransform: "uppercase", letterSpacing: "0.05em", marginBottom: "0.3rem" };
-  const input: React.CSSProperties = { background: "#1a1a1a", border: "1px solid #333", borderRadius: 8, color: "#e5e5e5", padding: "0.5rem 0.75rem", fontSize: "0.88rem", width: "100%" };
-  const kpi: React.CSSProperties   = { background: "#0f0f0f", border: "1px solid #1e1e1e", borderRadius: 10, padding: "0.875rem 1rem" };
-  const tabBtn = (active: boolean): React.CSSProperties => ({
-    padding: "0.35rem 1rem", fontSize: "0.8rem", fontWeight: 600, borderRadius: 7, cursor: "pointer",
-    border: `1px solid ${active ? "#3b82f6" : "#2a2a2a"}`,
-    background: active ? "#1e3a5f" : "transparent",
-    color: active ? "#3b82f6" : "#666",
-  });
-
+function AnalystBar({ rec }: { rec: string }) {
+  const map: Record<string, { label: string; color: string; pct: number }> = {
+    strongBuy:    { label: "Strong Buy",    color: "#4ade80", pct: 90 },
+    buy:          { label: "Buy",           color: "#86efac", pct: 70 },
+    hold:         { label: "Hold",          color: "#facc15", pct: 50 },
+    underperform: { label: "Underperform",  color: "#f87171", pct: 30 },
+    sell:         { label: "Sell",          color: "#f87171", pct: 10 },
+  };
+  const r = map[rec] ?? { label: rec, color: "#888", pct: 50 };
   return (
-    <div style={{ minHeight: "100dvh", background: "#0a0a0a", color: "#e5e5e5", fontFamily: "system-ui, sans-serif" }}>
-
-      {/* Nav */}
-      <div style={{ borderBottom: "1px solid #1a1a1a", padding: "0 1.5rem", display: "flex", alignItems: "center", height: 48, gap: "1.25rem", background: "#0d0d0d" }}>
-        <a href="/"        style={{ color: "#3b82f6", textDecoration: "none", fontSize: "0.85rem", fontWeight: 600 }}>◀ Portfolio</a>
-        <span style={{ color: "#222" }}>|</span>
-        <a href="/scanner" style={{ color: "#666",   textDecoration: "none", fontSize: "0.85rem" }}>Scanner</a>
-        <span style={{ color: "#222" }}>|</span>
-        <span style={{ color: "#e5e5e5", fontSize: "0.85rem", fontWeight: 700 }}>⏱ Simulator</span>
-        <button
-          onClick={() => { setShowSaved((p) => !p); loadSaved(); }}
-          style={{ marginLeft: "auto", fontSize: "0.78rem", padding: "0.25rem 0.875rem", borderRadius: 7, border: "1px solid #2a2a2a", background: showSaved ? "#1e3a5f" : "transparent", color: showSaved ? "#3b82f6" : "#666", cursor: "pointer" }}>
-          📋 Saved ({saved.length})
-        </button>
+    <div style={{ display: "flex", alignItems: "center", gap: "0.75rem" }}>
+      <span style={{ color: r.color, fontWeight: 700, fontSize: "0.9rem", minWidth: "110px" }}>{r.label}</span>
+      <div style={{ flex: 1, height: "6px", background: "#2a2a2a", borderRadius: "3px" }}>
+        <div style={{ width: `${r.pct}%`, height: "100%", background: r.color, borderRadius: "3px" }} />
       </div>
+    </div>
+  );
+}
 
-      <div style={{ maxWidth: 1100, margin: "0 auto", padding: "1.5rem" }}>
-        <div style={{ marginBottom: "1.25rem" }}>
-          <h1 style={{ fontSize: "1.3rem", fontWeight: 700, marginBottom: "0.25rem" }}>⏱ What-If Simulator</h1>
-          <p style={{ color: "#555", fontSize: "0.82rem" }}>Enter a hypothetical position to see P&L, vs S&P 500, and the market context at entry</p>
-        </div>
-
-        {/* ── INPUT FORM ─────────────────────────────────────────────── */}
-        <div style={{ ...card, marginBottom: "1.25rem" }}>
-          <form onSubmit={runSimulation}>
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(160px, 1fr))", gap: "0.875rem", marginBottom: "1rem" }}>
-              <div>
-                <div style={label}>Ticker Symbol</div>
-                <input style={input} value={symbol} onChange={(e) => setSymbol(e.target.value.toUpperCase())}
-                  placeholder="NVDA" required list="holdings-list" />
-                <datalist id="holdings-list">
-                  {holdings.map((h) => <option key={h.symbol} value={h.symbol} />)}
-                </datalist>
-              </div>
-              <div>
-                <div style={label}>Entry Date</div>
-                <input style={input} type="date" value={entryDate} onChange={(e) => setEntryDate(e.target.value)}
-                  required max={new Date().toISOString().split("T")[0]} />
-              </div>
-              <div>
-                <div style={label}>Number of Shares</div>
-                <input style={input} type="number" min="0.001" step="any"
-                  value={shares} onChange={(e) => setShares(e.target.value)} required placeholder="10" />
-              </div>
-            </div>
-
-            {holdings.length > 0 && (
-              <div style={{ marginBottom: "1rem" }}>
-                <div style={{ ...label, marginBottom: "0.4rem" }}>Quick-fill from your holdings</div>
-                <div style={{ display: "flex", gap: "0.4rem", flexWrap: "wrap" }}>
-                  {holdings.map((h) => (
-                    <button key={h.symbol} type="button"
-                      onClick={() => setSymbol(h.symbol)}
-                      style={{ fontSize: "0.75rem", padding: "3px 10px", borderRadius: 20, cursor: "pointer",
-                        border: `1px solid ${symbol === h.symbol ? "#3b82f6" : "#2a2a2a"}`,
-                        background: symbol === h.symbol ? "#1e3a5f" : "transparent",
-                        color: symbol === h.symbol ? "#3b82f6" : "#888" }}>
-                      {h.symbol}
-                    </button>
-                  ))}
-                </div>
-              </div>
-            )}
-
-            <button type="submit" disabled={loading}
-              style={{ background: "#3b82f6", color: "#fff", border: "none", borderRadius: 8, padding: "0.5rem 1.5rem", fontSize: "0.88rem", fontWeight: 700, cursor: "pointer", opacity: loading ? 0.6 : 1 }}>
-              {loading ? "⏳ Simulating…" : "▶ Run Simulation"}
+function SVGChart({ data, period, onPeriodChange }: { data: ChartPoint[]; period: string; onPeriodChange: (p: string) => void }) {
+  const [tooltip, setTooltip] = useState<{ x: number; y: number; date: string; price: number } | null>(null);
+  if (!data.length) return <p style={{ color: "#555", padding: "2rem 0" }}>No chart data available.</p>;
+  const W = 600, H = 160, PAD = { top: 16, bottom: 28, left: 10, right: 10 };
+  const prices = data.map((d) => d.close);
+  const minP = Math.min(...prices), maxP = Math.max(...prices), range = maxP - minP || 1;
+  const xScale = (i: number) => PAD.left + (i / (data.length - 1)) * (W - PAD.left - PAD.right);
+  const yScale = (p: number) => PAD.top + (1 - (p - minP) / range) * (H - PAD.top - PAD.bottom);
+  const pts = data.map((d, i) => `${xScale(i)},${yScale(d.close)}`).join(" ");
+  const isUp = prices[prices.length - 1] >= prices[0];
+  const lineColor = isUp ? "#4ade80" : "#f87171";
+  const areaPath = `M${xScale(0)},${yScale(data[0].close)} ${data.map((d, i) => `L${xScale(i)},${yScale(d.close)}`).join(" ")} L${xScale(data.length - 1)},${H - PAD.bottom} L${xScale(0)},${H - PAD.bottom} Z`;
+  const periods = ["1D", "1W", "1M", "3M", "YTD", "6M", "1Y"];
+  const changePct = ((prices[prices.length - 1] - prices[0]) / prices[0] * 100).toFixed(2);
+  const handleMouseMove = (e: React.MouseEvent<SVGSVGElement>) => {
+    const rect = e.currentTarget.getBoundingClientRect();
+    const mx = (e.clientX - rect.left) / rect.width * W;
+    const c = Math.min(data.length - 1, Math.max(0, Math.round((mx - PAD.left) / (W - PAD.left - PAD.right) * (data.length - 1))));
+    setTooltip({ x: xScale(c), y: yScale(data[c].close), date: data[c].date, price: data[c].close });
+  };
+  return (
+    <div>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "0.75rem", flexWrap: "wrap", gap: "0.5rem" }}>
+        <span style={{ fontSize: "0.85rem", color: isUp ? "#4ade80" : "#f87171", fontWeight: 600 }}>{isUp ? "▲" : "▼"} {changePct}% over period</span>
+        <div style={{ display: "flex", gap: "0.4rem", flexWrap: "wrap" }}>
+          {periods.map((p) => (
+            <button key={p} onClick={() => onPeriodChange(p)}
+              style={{ padding: "0.2rem 0.6rem", fontSize: "0.75rem", borderRadius: "4px", border: "1px solid", cursor: "pointer",
+                background: period === p ? "#1e3a5f" : "transparent", color: period === p ? "#3b82f6" : "#888", borderColor: period === p ? "#3b82f6" : "#333" }}>
+              {p}
             </button>
-          </form>
+          ))}
         </div>
-
-        {error && (
-          <div style={{ background: "#1a0a0a", border: "1px solid #7f1d1d", borderRadius: 10, padding: "0.875rem 1rem", color: "#fca5a5", fontSize: "0.85rem", marginBottom: "1.25rem" }}>
-            ⚠️ {error}
-          </div>
-        )}
-
-        {/* ── RESULTS ─────────────────────────────────────────────────── */}
-        {result && (
-          <>
-            {/* KPI strip */}
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(150px, 1fr))", gap: "0.6rem", marginBottom: "1rem" }}>
-              {[
-                { l: "Cost Basis",    v: fmt(result.costBasis),     sub: `${result.shares} shares @ ${fmt(result.entryPrice)}` },
-                { l: "Current Value", v: fmt(result.currentValue),  sub: `@ ${fmt(result.currentPrice)} today`,  c: clr(result.gainLoss) },
-                { l: "Total P&L",     v: fmt(result.gainLoss),      sub: fmtPct(result.gainLossPct),             c: clr(result.gainLoss) },
-                { l: "CAGR",          v: fmtPct(result.cagr),       sub: `${result.daysHeld} days held`,         c: clr(result.cagr) },
-                { l: "vs S&P 500",    v: fmtPct(result.alpha),      sub: `SPY: ${fmtPct(result.spyReturn)}`,     c: clr(result.alpha) },
-                { l: "Max Drawdown",  v: fmtPct(result.maxDrawdown, false), sub: "Peak-to-trough",              c: "#f87171" },
-                { l: "Best Price",    v: fmt(result.bestPrice),     sub: fmtPct(((result.bestPrice - result.entryPrice) / result.entryPrice) * 100) + " from entry", c: "#4ade80" },
-                { l: "Worst Price",   v: fmt(result.worstPrice),    sub: fmtPct(((result.worstPrice - result.entryPrice) / result.entryPrice) * 100) + " from entry", c: "#f87171" },
-              ].map((k) => (
-                <div key={k.l} style={kpi}>
-                  <div style={{ fontSize: "0.68rem", color: "#555", marginBottom: "0.25rem", textTransform: "uppercase", letterSpacing: "0.05em" }}>{k.l}</div>
-                  <div style={{ fontSize: "1.05rem", fontWeight: 700, color: k.c ?? "#e5e5e5", fontVariantNumeric: "tabular-nums" }}>{k.v}</div>
-                  <div style={{ fontSize: "0.68rem", color: "#555", marginTop: "0.15rem" }}>{k.sub}</div>
-                </div>
-              ))}
-            </div>
-
-            {/* Panel tabs */}
-            <div style={{ display: "flex", gap: "0.4rem", marginBottom: "0.75rem" }}>
-              {(["chart", "context", "snapshots"] as const).map((p) => (
-                <button key={p} style={tabBtn(activePanel === p)} onClick={() => setActivePanel(p)}>
-                  {p === "chart" ? "📈 Chart" : p === "context" ? "📰 Context Panel" : "📊 Timeline Snapshots"}
-                </button>
-              ))}
-            </div>
-
-            {/* Chart */}
-            {activePanel === "chart" && (
-              <div style={{ ...card, marginBottom: "1rem" }}>
-                <div style={{ fontSize: "0.82rem", color: "#888", marginBottom: "1rem" }}>
-                  Entry: <strong style={{ color: "#e5e5e5" }}>{result.actualEntryDate}</strong> · {result.symbol} vs SPY — same dollars invested
-                </div>
-                <DualChart data={result.chartData} symbol={result.symbol} />
-              </div>
-            )}
-
-            {/* Context */}
-            {activePanel === "context" && (
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: "0.875rem", marginBottom: "1rem" }}>
-                <div style={card}>
-                  <div style={{ fontWeight: 700, fontSize: "0.88rem", marginBottom: "0.875rem" }}>🌍 Market Environment at Entry</div>
-                  {[
-                    { l: "S&P 500 return (same period)",   v: fmtPct(result.marketContext.spyReturn),         c: clr(result.marketContext.spyReturn) },
-                    { l: "SPY volatility at entry week",   v: fmtPct(result.marketContext.spyVolatilityPct),  c: result.marketContext.spyVolatilityPct > 2 ? "#f87171" : "#4ade80" },
-                    { l: "Sector",                         v: result.marketContext.sector ?? "—",              c: "#e5e5e5" },
-                    { l: "Analyst consensus",              v: result.marketContext.recommendation ?? "—",      c: "#facc15" },
-                    { l: "Your alpha (outperformance)",    v: fmtPct(result.alpha),                            c: clr(result.alpha) },
-                  ].map((row) => (
-                    <div key={row.l} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "0.4rem 0", borderBottom: "1px solid #1a1a1a" }}>
-                      <span style={{ fontSize: "0.8rem", color: "#666" }}>{row.l}</span>
-                      <span style={{ fontSize: "0.85rem", fontWeight: 600, color: row.c }}>{row.v}</span>
-                    </div>
-                  ))}
-                </div>
-
-                <div style={card}>
-                  <div style={{ fontWeight: 700, fontSize: "0.88rem", marginBottom: "0.875rem" }}>📰 Recent News — {result.symbol}</div>
-                  {result.news.length === 0 && <p style={{ color: "#444", fontSize: "0.82rem" }}>No news available.</p>}
-                  <div style={{ display: "flex", flexDirection: "column", gap: "0.6rem", maxHeight: 360, overflowY: "auto" }}>
-                    {result.news.map((n, i) => (
-                      <a key={i} href={n.link} target="_blank" rel="noopener noreferrer"
-                        style={{ display: "flex", gap: "0.6rem", background: "#0f0f0f", border: "1px solid #1e1e1e", borderRadius: 8, padding: "0.6rem", textDecoration: "none", color: "inherit" }}>
-                        {n.thumbnail && <img src={n.thumbnail} alt="" width={60} height={40} style={{ objectFit: "cover", borderRadius: 4, flexShrink: 0 }} loading="lazy" />}
-                        <div>
-                          <div style={{ fontSize: "0.8rem", color: "#ccc", lineHeight: 1.45, fontWeight: 500 }}>{n.title}</div>
-                          <div style={{ display: "flex", gap: "0.6rem", marginTop: "0.3rem" }}>
-                            <span style={{ fontSize: "0.7rem", color: "#3b82f6", fontWeight: 600 }}>{n.publisher}</span>
-                            <span style={{ fontSize: "0.7rem", color: "#444" }}>{n.publishedAt ? timeAgo(n.publishedAt) : ""}</span>
-                          </div>
-                        </div>
-                      </a>
-                    ))}
-                  </div>
-                </div>
-              </div>
-            )}
-
-            {/* Snapshots */}
-            {activePanel === "snapshots" && (
-              <div style={{ ...card, marginBottom: "1rem" }}>
-                <div style={{ fontWeight: 700, fontSize: "0.88rem", marginBottom: "1rem" }}>📊 Value at Key Intervals from Entry</div>
-                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(190px, 1fr))", gap: "0.75rem" }}>
-                  {[
-                    { label: "Entry Day", snap: { price: result.entryPrice,   value: result.costBasis,    date: result.actualEntryDate } },
-                    { label: "+7 Days",   snap: result.snapshots.d7  },
-                    { label: "+30 Days",  snap: result.snapshots.d30 },
-                    { label: "+90 Days",  snap: result.snapshots.d90 },
-                    { label: "Today",     snap: { price: result.currentPrice, value: result.currentValue, date: "now" } },
-                  ].map(({ label: lbl, snap }) => {
-                    if (!snap) return (
-                      <div key={lbl} style={{ ...kpi, opacity: 0.4 }}>
-                        <div style={{ fontSize: "0.72rem", color: "#555", marginBottom: 4 }}>{lbl}</div>
-                        <div style={{ fontSize: "0.8rem", color: "#444" }}>Not yet reached</div>
-                      </div>
-                    );
-                    const gl = snap.value - result.costBasis;
-                    return (
-                      <div key={lbl} style={{ ...kpi, borderColor: gl >= 0 ? "#1a3a1a" : "#3a1a1a" }}>
-                        <div style={{ fontSize: "0.72rem", color: "#555", marginBottom: 4, textTransform: "uppercase", letterSpacing: "0.04em" }}>{lbl}</div>
-                        <div style={{ fontSize: "1.1rem", fontWeight: 700, color: clr(gl), fontVariantNumeric: "tabular-nums" }}>{fmt(snap.value)}</div>
-                        <div style={{ fontSize: "0.75rem", color: "#555", marginTop: 2 }}>@ {fmt(snap.price)} · {snap.date}</div>
-                        <div style={{ fontSize: "0.78rem", color: clr(gl), fontWeight: 600, marginTop: 4 }}>
-                          {gl >= 0 ? "+" : ""}{fmt(gl)} ({fmtPct((gl / result.costBasis) * 100)})
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              </div>
-            )}
-
-            {/* Save & Tag */}
-            <div style={{ ...card, borderColor: savedMsg ? "#166534" : "#1e1e1e" }}>
-              <div style={{ fontWeight: 700, fontSize: "0.88rem", marginBottom: "0.5rem" }}>💾 Save to Pattern Library</div>
-              <div style={{ fontSize: "0.78rem", color: "#555", marginBottom: "0.875rem" }}>Tag this simulation to build your personal prediction database</div>
-              <div style={{ marginBottom: "0.875rem" }}>
-                <div style={{ ...label, marginBottom: "0.4rem" }}>Context Tags</div>
-                <div style={{ display: "flex", flexWrap: "wrap", gap: "0.375rem" }}>
-                  {TAGS.map((tag) => (
-                    <button key={tag} type="button" onClick={() => toggleTag(tag)}
-                      style={{ fontSize: "0.75rem", padding: "4px 10px", borderRadius: 20, cursor: "pointer",
-                        border: `1px solid ${selectedTags.includes(tag) ? "#3b82f6" : "#2a2a2a"}`,
-                        background: selectedTags.includes(tag) ? "#1e3a5f" : "transparent",
-                        color: selectedTags.includes(tag) ? "#3b82f6" : "#666" }}>
-                      {tag}
-                    </button>
-                  ))}
-                </div>
-              </div>
-              <div style={{ marginBottom: "0.875rem" }}>
-                <div style={label}>Note / Observation</div>
-                <textarea value={note} onChange={(e) => setNote(e.target.value)}
-                  placeholder="e.g. Dropped on supply concern headline, analyst targets unchanged, recovered in 12 days…"
-                  style={{ ...input, resize: "vertical", minHeight: 72, lineHeight: 1.5 } as React.CSSProperties} />
-              </div>
-              <button onClick={saveSimulation} disabled={saving || savedMsg}
-                style={{ background: savedMsg ? "#166534" : "#1e3a5f", color: savedMsg ? "#4ade80" : "#3b82f6",
-                  border: `1px solid ${savedMsg ? "#166534" : "#3b82f6"}`, borderRadius: 8,
-                  padding: "0.45rem 1.25rem", fontSize: "0.85rem", fontWeight: 700, cursor: "pointer" }}>
-                {savedMsg ? "✅ Saved!" : saving ? "Saving…" : "Save Simulation"}
-              </button>
-            </div>
-          </>
-        )}
-
-        {/* ── SAVED SIMULATIONS ───────────────────────────────────────── */}
-        {showSaved && (
-          <div style={{ marginTop: "1.5rem" }}>
-            <div style={{ fontWeight: 700, fontSize: "1rem", marginBottom: "0.875rem" }}>📋 Saved Simulations ({saved.length})</div>
-            {saved.length === 0 && <p style={{ color: "#444", fontSize: "0.85rem" }}>No saved simulations yet.</p>}
-            <div style={{ display: "flex", flexDirection: "column", gap: "0.6rem" }}>
-              {saved.map((sim) => (
-                <div key={sim.id} style={{ ...card, display: "flex", alignItems: "flex-start", gap: "1rem", flexWrap: "wrap" }}>
-                  <div style={{ minWidth: 80 }}>
-                    <div style={{ fontWeight: 700, fontFamily: "monospace", fontSize: "1rem" }}>{sim.symbol}</div>
-                    <div style={{ fontSize: "0.72rem", color: "#555" }}>{new Date(sim.entryDate).toLocaleDateString()}</div>
-                    <div style={{ fontSize: "0.72rem", color: "#555" }}>{sim.shares} shares</div>
-                  </div>
-                  <div style={{ flex: 1, display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(100px, 1fr))", gap: "0.5rem" }}>
-                    {[
-                      { l: "P&L",      v: fmtPct(sim.gainLossPct), c: clr(sim.gainLossPct) },
-                      { l: "CAGR",     v: fmtPct(sim.cagr),        c: clr(sim.cagr) },
-                      { l: "α vs SPY", v: fmtPct(sim.alpha),       c: clr(sim.alpha) },
-                      { l: "Days",     v: String(sim.daysHeld),     c: "#888" },
-                    ].map((k) => (
-                      <div key={k.l}>
-                        <div style={{ fontSize: "0.65rem", color: "#444", textTransform: "uppercase" }}>{k.l}</div>
-                        <div style={{ fontSize: "0.88rem", fontWeight: 600, color: k.c }}>{k.v}</div>
-                      </div>
-                    ))}
-                  </div>
-                  <div style={{ flex: 2 }}>
-                    {sim.tags.length > 0 && (
-                      <div style={{ display: "flex", flexWrap: "wrap", gap: "0.3rem", marginBottom: "0.4rem" }}>
-                        {sim.tags.map((t) => (
-                          <span key={t} style={{ fontSize: "0.68rem", padding: "2px 7px", borderRadius: 20, background: "#1e3a5f", color: "#3b82f6" }}>{t}</span>
-                        ))}
-                      </div>
-                    )}
-                    {sim.note && <p style={{ fontSize: "0.78rem", color: "#555", fontStyle: "italic" }}>{sim.note}</p>}
-                  </div>
-                  <button onClick={() => deleteSaved(sim.id)}
-                    style={{ fontSize: "0.72rem", padding: "3px 8px", borderRadius: 6, border: "1px solid #2a2a2a", background: "transparent", color: "#555", cursor: "pointer", flexShrink: 0 }}>✕</button>
-                </div>
-              ))}
-            </div>
+      </div>
+      <div style={{ position: "relative" }}>
+        <svg viewBox={`0 0 ${W} ${H}`} style={{ width: "100%", height: "auto", display: "block" }} onMouseMove={handleMouseMove} onMouseLeave={() => setTooltip(null)}>
+          <defs><linearGradient id="chartFill" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor={lineColor} stopOpacity="0.15" /><stop offset="100%" stopColor={lineColor} stopOpacity="0" /></linearGradient></defs>
+          <path d={areaPath} fill="url(#chartFill)" />
+          <polyline points={pts} fill="none" stroke={lineColor} strokeWidth="1.5" strokeLinejoin="round" />
+          {tooltip && (<><line x1={tooltip.x} y1={PAD.top} x2={tooltip.x} y2={H - PAD.bottom} stroke="#444" strokeWidth="1" strokeDasharray="3,3" /><circle cx={tooltip.x} cy={tooltip.y} r="4" fill={lineColor} stroke="#111" strokeWidth="2" /></>)}
+          {[0, Math.floor(data.length / 2), data.length - 1].map((i) => (
+            <text key={i} x={xScale(i)} y={H - 4} textAnchor="middle" fontSize="10" fill="#555">{data[i]?.date}</text>
+          ))}
+        </svg>
+        {tooltip && (
+          <div style={{ position: "absolute", top: "8px", left: tooltip.x > 300 ? "8px" : "auto", right: tooltip.x <= 300 ? "8px" : "auto", background: "#1a1a1a", border: "1px solid #333", borderRadius: "6px", padding: "0.4rem 0.6rem", fontSize: "0.8rem", pointerEvents: "none" }}>
+            <div style={{ color: "#aaa" }}>{tooltip.date}</div>
+            <div style={{ color: "#e5e5e5", fontWeight: 700 }}>{fmt(tooltip.price)}</div>
           </div>
         )}
       </div>
     </div>
+  );
+}
+
+type TabKey = "stats" | "chart" | "profile" | "news";
+
+export default function Home() {
+  const [portfolio, setPortfolio]           = useState<Portfolio | null>(null);
+  const [symbol, setSymbol]                 = useState("");
+  const [quantity, setQuantity]             = useState("");
+  const [avgCost, setAvgCost]               = useState("");
+  const [loading, setLoading]               = useState(false);
+  const [fetching, setFetching]             = useState(false);
+  const [mounted, setMounted]               = useState(false);
+  const [lastUpdated, setLastUpdated]       = useState<Date | null>(null);
+  const [secondsAgo, setSecondsAgo]         = useState(0);
+  const [expandedId, setExpandedId]         = useState<number | null>(null);
+  const [activeTab, setActiveTab]           = useState<Record<number, TabKey>>({});
+  const [newsCache, setNewsCache]           = useState<Record<number, NewsItem[]>>({});
+  const [newsLoading, setNewsLoading]       = useState<Record<number, boolean>>({});
+  const [chartCache, setChartCache]         = useState<Record<string, ChartPoint[]>>({});
+  const [chartLoading, setChartLoading]     = useState(false);
+  const [chartPeriod, setChartPeriod]       = useState<Record<number, string>>({});
+  const [summaryCache, setSummaryCache]     = useState<Record<number, SummaryData>>({});
+  const [summaryLoading, setSummaryLoading] = useState<Record<number, boolean>>({});
+  const [editingId, setEditingId]           = useState<number | null>(null);
+  const [editQty, setEditQty]               = useState("");
+  const [editAvgCost, setEditAvgCost]       = useState("");
+  const [expandedDesc, setExpandedDesc]     = useState<Record<number, boolean>>({});
+  const prevPrices = useRef<Record<number, number | null>>({});
+
+  const fetchPortfolio = useCallback(async () => {
+    setFetching(true);
+    try {
+      const res = await fetch("/api/portfolio");
+      const data: Portfolio = await res.json();
+      setPortfolio((prev) => {
+        if (prev) { const m: Record<number, number | null> = {}; prev.stocks.forEach((s) => { m[s.id] = s.currentPrice; }); prevPrices.current = m; }
+        return data;
+      });
+      setLastUpdated(new Date());
+    } finally { setFetching(false); }
+  }, []);
+
+  const fetchNews = useCallback(async (id: number, sym: string) => {
+    if (newsCache[id]) return;
+    setNewsLoading((p) => ({ ...p, [id]: true }));
+    try { const r = await fetch(`/api/news?symbol=${sym}`); const d = await r.json(); setNewsCache((p) => ({ ...p, [id]: d.news ?? [] })); }
+    finally { setNewsLoading((p) => ({ ...p, [id]: false })); }
+  }, [newsCache]);
+
+  const fetchChart = useCallback(async (id: number, sym: string, period: string) => {
+    const key = `${id}-${period}`; if (chartCache[key]) return;
+    setChartLoading(true);
+    try { const r = await fetch(`/api/chart?symbol=${sym}&period=${period}`); const d = await r.json(); setChartCache((p) => ({ ...p, [key]: d.data ?? [] })); }
+    finally { setChartLoading(false); }
+  }, [chartCache]);
+
+  const fetchSummary = useCallback(async (id: number, sym: string) => {
+    if (summaryCache[id]) return;
+    setSummaryLoading((p) => ({ ...p, [id]: true }));
+    try { const r = await fetch(`/api/summary?symbol=${sym}`); const d = await r.json(); setSummaryCache((p) => ({ ...p, [id]: d })); }
+    finally { setSummaryLoading((p) => ({ ...p, [id]: false })); }
+  }, [summaryCache]);
+
+  useEffect(() => { setMounted(true); fetchPortfolio(); const iv = setInterval(fetchPortfolio, 30_000); return () => clearInterval(iv); }, [fetchPortfolio]);
+  useEffect(() => { const iv = setInterval(() => { if (lastUpdated) setSecondsAgo(Math.floor((Date.now() - lastUpdated.getTime()) / 1000)); }, 1000); return () => clearInterval(iv); }, [lastUpdated]);
+
+  function toggleRow(s: StockRow) {
+    if (editingId === s.id) return;
+    const opening = expandedId !== s.id;
+    setExpandedId(opening ? s.id : null);
+    if (opening) {
+      setActiveTab((p) => ({ ...p, [s.id]: p[s.id] ?? "stats" }));
+      fetchNews(s.id, s.symbol); fetchSummary(s.id, s.symbol);
+      fetchChart(s.id, s.symbol, chartPeriod[s.id] ?? "1M");
+    }
+  }
+  function switchTab(id: number, tab: TabKey, sym: string) {
+    setActiveTab((p) => ({ ...p, [id]: tab }));
+    if (tab === "news")   fetchNews(id, sym);
+    if (tab === "chart")  fetchChart(id, sym, chartPeriod[id] ?? "1M");
+    if (tab === "stats" || tab === "profile") fetchSummary(id, sym);
+  }
+  function changePeriod(id: number, sym: string, period: string) { setChartPeriod((p) => ({ ...p, [id]: period })); fetchChart(id, sym, period); }
+
+  async function addStock(e: React.FormEvent) {
+    e.preventDefault(); setLoading(true);
+    await fetch("/api/stocks", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ symbol, quantity: +quantity, avgCost: +avgCost }) });
+    setSymbol(""); setQuantity(""); setAvgCost(""); await fetchPortfolio(); setLoading(false);
+  }
+  async function deleteStock(id: number) { await fetch(`/api/stocks/${id}`, { method: "DELETE" }); setExpandedId(null); await fetchPortfolio(); }
+  async function saveEdit(id: number) {
+    await fetch("/api/stocks", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ symbol: portfolio!.stocks.find((s) => s.id === id)!.symbol, quantity: +editQty, avgCost: +editAvgCost }) });
+    setEditingId(null); await fetchPortfolio();
+  }
+
+  const gainColor = (v: number | null | undefined) => v == null ? "" : v >= 0 ? "positive" : "negative";
+  const priceArrow = (s: StockRow) => { const prev = prevPrices.current[s.id]; if (prev == null || s.currentPrice == null) return null; if (s.currentPrice > prev) return <span style={{ color: "#4ade80" }}> ▲</span>; if (s.currentPrice < prev) return <span style={{ color: "#f87171" }}> ▼</span>; return null; };
+
+  if (!mounted) return null;
+  const totalValue = portfolio?.totalValue ?? 0;
+
+  return (
+    <main>
+      <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", flexWrap: "wrap", gap: "1rem" }}>
+        <div><h1>📈 Portfolio Tracker</h1><p style={{ color: "#888", marginBottom: "1rem" }}>Track your holdings and research stocks in real time</p></div>
+        <div style={{ display: "flex", alignItems: "center", gap: "0.75rem" }}>
+          {lastUpdated && <span style={{ color: "#888", fontSize: "0.85rem" }}>Last updated: {secondsAgo}s ago</span>}
+          <button className="btn-primary" onClick={fetchPortfolio} disabled={fetching} style={{ padding: "0.4rem 0.9rem", fontSize: "0.85rem" }}>{fetching ? "⏳" : "🔄 Refresh"}</button>
+        </div>
+      </div>
+      <div style={{ display: "flex", justifyContent: "flex-end", marginBottom: "1rem" }}>
+        <a href="/scanner"
+          style={{ display: "inline-flex", alignItems: "center", gap: "0.4rem", padding: "0.4rem 1rem", background: "#0c1d30", color: "#3b82f6", border: "1px solid #1e3a5f", borderRadius: 8, fontSize: "0.82rem", fontWeight: 600, textDecoration: "none" }}>
+          📊 Scanner & Watchlist →
+        </a>
+      </div>
+
+      {portfolio && (
+        <div className="card">
+          <p style={{ color: "#888", fontSize: "0.85rem", textTransform: "uppercase", letterSpacing: "0.05em" }}>Total Net Worth</p>
+          <p className="net-worth">{fetching ? "Updating…" : fmt(portfolio.totalValue)}</p>
+          <p className="subtitle">Cost Basis: {fmt(portfolio.totalCost)}&nbsp;&nbsp;|&nbsp;&nbsp;
+            <span className={gainColor(portfolio.totalGainLoss)}>Total P&L: {fmt(portfolio.totalGainLoss)}{portfolio.totalCost > 0 && ` (${((portfolio.totalGainLoss / portfolio.totalCost) * 100).toFixed(2)}%)`}</span>
+          </p>
+        </div>
+      )}
+
+      <form onSubmit={addStock}>
+        <label>Ticker Symbol<input value={symbol} onChange={(e) => setSymbol(e.target.value.toUpperCase())} placeholder="AAPL" required /></label>
+        <label>Quantity<input type="number" min="0.0001" step="any" value={quantity} onChange={(e) => setQuantity(e.target.value)} placeholder="10" required /></label>
+        <label>Avg Cost ($)<input type="number" min="0.0001" step="any" value={avgCost} onChange={(e) => setAvgCost(e.target.value)} placeholder="150.00" required /></label>
+        <button type="submit" className="btn-primary" disabled={loading} style={{ alignSelf: "flex-end" }}>{loading ? "Adding…" : "Add / Update Stock"}</button>
+      </form>
+
+      {fetching && !portfolio && <div className="empty"><p>Loading portfolio…</p></div>}
+      {!fetching && portfolio?.stocks.length === 0 && <div className="empty"><p>No stocks yet.</p><p style={{ marginTop: "0.5rem", fontSize: "0.9rem" }}>Add your first holding above ↑</p></div>}
+
+      {portfolio && portfolio.stocks.length > 0 && (
+        <table>
+          <thead><tr><th>Symbol</th><th>Qty</th><th>Avg Cost</th><th>Live Price</th><th>Market Value</th><th>Allocation</th><th>Cost Basis</th><th>P&L ($)</th><th>P&L (%)</th><th>Actions</th></tr></thead>
+          <tbody>
+            {portfolio.stocks.map((s) => {
+              const tab      = activeTab[s.id] ?? "stats";
+              const period   = chartPeriod[s.id] ?? "1M";
+              const chartKey = `${s.id}-${period}`;
+              const sum      = summaryCache[s.id];
+              const fd  = sum?.financialData; const ks = sum?.defaultKeyStatistics;
+              const sd  = sum?.summaryDetail; const ap = sum?.assetProfile;
+              const ce  = sum?.calendarEvents;
+              const et  = sum?.earningsTrend?.trend?.slice(0, 4) ?? [];
+              const insiders     = sum?.insiderHolders?.holders?.slice(0, 5) ?? [];
+              const institutions = sum?.institutionOwnership?.ownershipList?.slice(0, 5) ?? [];
+              const major    = sum?.majorHoldersBreakdown;
+              const upgrades = sum?.upgradeDowngradeHistory?.history?.slice(0, 6) ?? [];
+              const earningsDate   = ce?.earnings?.earningsDate?.[0];
+              const daysToEarnings = earningsDate ? daysUntil(earningsDate) : null;
+
+              return (
+                <Fragment key={s.id}>
+                  <tr style={{ cursor: "pointer" }} onClick={() => toggleRow(s)}>
+                    <td><strong>{s.symbol}</strong>{expandedId === s.id && <span style={{ color: "#555", fontSize: "0.75rem", marginLeft: "0.4rem" }}>▼</span>}</td>
+                    <td onClick={(e) => e.stopPropagation()}>{editingId === s.id ? <input type="number" step="any" value={editQty} onChange={(e) => setEditQty(e.target.value)} style={{ width: "80px" }} /> : s.quantity}</td>
+                    <td onClick={(e) => e.stopPropagation()}>{editingId === s.id ? <input type="number" step="any" value={editAvgCost} onChange={(e) => setEditAvgCost(e.target.value)} style={{ width: "90px" }} /> : fmt(s.avgCost)}</td>
+                    <td>{fmt(s.currentPrice)}{priceArrow(s)}</td>
+                    <td>{fmt(s.currentValue)}</td>
+                    <td>{s.currentValue != null && totalValue > 0 ? `${((s.currentValue / totalValue) * 100).toFixed(1)}%` : "—"}</td>
+                    <td>{fmt(s.costBasis)}</td>
+                    <td className={gainColor(s.gainLoss)}>{fmt(s.gainLoss)}</td>
+                    <td className={gainColor(s.gainLossPct)}>{s.gainLossPct != null ? `${s.gainLossPct.toFixed(2)}%` : "—"}</td>
+                    <td onClick={(e) => e.stopPropagation()} style={{ whiteSpace: "nowrap" }}>
+                      {editingId === s.id ? (
+                        <><button className="btn-primary" style={{ padding: "0.2rem 0.6rem", fontSize: "0.8rem", marginRight: "0.4rem" }} onClick={() => saveEdit(s.id)}>Save</button><button className="btn-danger" onClick={() => setEditingId(null)}>Cancel</button></>
+                      ) : (
+                        <><button className="btn-edit" style={{ marginRight: "0.4rem" }} onClick={() => { setEditingId(s.id); setEditQty(String(s.quantity)); setEditAvgCost(String(s.avgCost)); setExpandedId(null); }}>✏️</button><button className="btn-danger" onClick={() => deleteStock(s.id)}>✕</button></>
+                      )}
+                    </td>
+                  </tr>
+
+                  {expandedId === s.id && (
+                    <tr><td colSpan={10} style={{ padding: 0 }}>
+                      <div className="detail-card">
+                        <div className="tab-bar">
+                          {(["stats", "chart", "profile", "news"] as TabKey[]).map((t) => (
+                            <button key={t} className={`tab-btn ${tab === t ? "tab-active" : ""}`} onClick={() => switchTab(s.id, t, s.symbol)}>
+                              {t === "stats" ? "📊 Stats" : t === "chart" ? "📈 Chart" : t === "profile" ? "🏢 Profile" : "📰 News"}
+                            </button>
+                          ))}
+                        </div>
+
+                        {/* ── STATS TAB ─────────────────────────────────────── */}
+                        {tab === "stats" && (
+                          <div>
+                            {summaryLoading[s.id] && <p style={{ color: "#555" }}>Loading stats…</p>}
+                            {!summaryLoading[s.id] && sum && (<>
+                              {/* Key metrics */}
+                              <div className="detail-grid" style={{ marginBottom: "1.25rem" }}>
+                                <div className="detail-item"><span className="detail-label">P/E Ratio</span><span className="detail-value">{sd?.trailingPE?.toFixed(1) ?? "—"}x</span></div>
+                                <div className="detail-item"><span className="detail-label">Forward P/E</span><span className="detail-value">{(ks?.forwardPE ?? sd?.forwardPE)?.toFixed(1) ?? "—"}x</span></div>
+                                <div className="detail-item"><span className="detail-label">EPS (TTM)</span><span className="detail-value">{fmt(ks?.trailingEps)}</span></div>
+                                <div className="detail-item"><span className="detail-label">Revenue Growth</span><span className={`detail-value ${gainColor(fd?.revenueGrowth)}`}>{fmtPct(fd?.revenueGrowth)}</span></div>
+                                <div className="detail-item"><span className="detail-label">Profit Margin</span><span className="detail-value">{fmtPct(fd?.profitMargins)}</span></div>
+                                <div className="detail-item"><span className="detail-label">Debt / Equity</span><span className="detail-value">{fd?.debtToEquity?.toFixed(2) ?? "—"}</span></div>
+                                <div className="detail-item"><span className="detail-label">Dividend Yield</span><span className="detail-value">{sd?.dividendYield ? fmtPct(sd.dividendYield) : "—"}</span></div>
+                                <div className="detail-item"><span className="detail-label">Short % Float</span><span className="detail-value">{fmtPct(ks?.shortPercentOfFloat)}</span></div>
+                                <div className="detail-item"><span className="detail-label">Insider Held</span><span className="detail-value">{fmtPct(major?.insidersPercentHeld ?? ks?.heldPercentInsiders)}</span></div>
+                                <div className="detail-item"><span className="detail-label">Institution Held</span><span className="detail-value">{fmtPct(major?.institutionsPercentHeld ?? ks?.heldPercentInstitutions)}</span></div>
+                                <div className="detail-item"><span className="detail-label">Institutions Count</span><span className="detail-value">{major?.institutionsCount?.toLocaleString() ?? "—"}</span></div>
+                                <div className="detail-item"><span className="detail-label">Market Cap</span><span className="detail-value">{fmtCompact(s.marketCap)}</span></div>
+                              </div>
+
+                              {/* 52W range bar */}
+                              {s.fiftyTwoWeekLow != null && s.fiftyTwoWeekHigh != null && s.currentPrice != null && (
+                                <div style={{ marginBottom: "1.25rem" }}>
+                                  <p className="detail-label" style={{ marginBottom: "0.25rem" }}>52-Week Range</p>
+                                  <RangeBar low={s.fiftyTwoWeekLow} high={s.fiftyTwoWeekHigh} current={s.currentPrice} />
+                                  <p style={{ fontSize: "0.75rem", color: "#666", marginTop: "0.4rem" }}>
+                                    {((s.currentPrice - s.fiftyTwoWeekLow) / (s.fiftyTwoWeekHigh - s.fiftyTwoWeekLow) * 100).toFixed(0)}% of 52W range
+                                  </p>
+                                </div>
+                              )}
+
+                              {/* Analyst price target */}
+                              {fd?.targetMeanPrice && (
+                                <div style={{ marginBottom: "1.25rem" }}>
+                                  <p className="detail-label" style={{ marginBottom: "0.5rem" }}>Analyst Price Target</p>
+                                  <div style={{ display: "flex", gap: "1.5rem", alignItems: "center", flexWrap: "wrap", marginBottom: "0.5rem" }}>
+                                    <span style={{ fontSize: "0.85rem", color: "#888" }}>Current: <strong style={{ color: "#e5e5e5" }}>{fmt(s.currentPrice)}</strong></span>
+                                    <span style={{ fontSize: "0.85rem", color: "#888" }}>Target: <strong style={{ color: "#4ade80" }}>{fmt(fd.targetMeanPrice)}</strong></span>
+                                    {s.currentPrice && <span className={gainColor(fd.targetMeanPrice - s.currentPrice)} style={{ fontSize: "0.85rem", fontWeight: 700 }}>{((fd.targetMeanPrice - s.currentPrice) / s.currentPrice * 100).toFixed(1)}% upside</span>}
+                                    {fd.numberOfAnalystOpinions && <span style={{ fontSize: "0.8rem", color: "#555" }}>{fd.numberOfAnalystOpinions} analysts</span>}
+                                  </div>
+                                  {fd.targetLowPrice && fd.targetHighPrice && <RangeBar low={fd.targetLowPrice} high={fd.targetHighPrice} current={fd.targetMeanPrice} color="#4ade80" />}
+                                  {fd.recommendationKey && <div style={{ marginTop: "0.75rem" }}><AnalystBar rec={fd.recommendationKey} /></div>}
+                                </div>
+                              )}
+
+                              {/* Earnings countdown */}
+                              {daysToEarnings != null && daysToEarnings > 0 && (
+                                <div style={{ display: "inline-flex", alignItems: "center", gap: "0.5rem", background: "#1a1a0a", border: "1px solid #facc15", borderRadius: "6px", padding: "0.4rem 0.75rem", marginBottom: "1.25rem" }}>
+                                  <span>📅</span>
+                                  <span style={{ color: "#facc15", fontSize: "0.85rem", fontWeight: 600 }}>Next Earnings: in {daysToEarnings} days ({fmtDate(String(earningsDate))})</span>
+                                </div>
+                              )}
+
+                              {/* Forward earnings estimates */}
+                              {et.length > 0 && (
+                                <div style={{ marginBottom: "1.25rem" }}>
+                                  <p className="detail-label" style={{ marginBottom: "0.6rem" }}>Forward Earnings Estimates</p>
+                                  <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(220px, 1fr))", gap: "0.6rem" }}>
+                                    {et.map((item, idx) => (
+                                      <div key={idx} style={{ background: "#1a1a1a", border: "1px solid #2a2a2a", borderRadius: "8px", padding: "0.75rem" }}>
+                                        <div style={{ display: "flex", justifyContent: "space-between", marginBottom: "0.4rem" }}>
+                                          <strong style={{ fontSize: "0.9rem" }}>{item.period ?? "—"}</strong>
+                                          <span className={gainColor(item.growth)} style={{ fontSize: "0.8rem" }}>{item.growth != null ? `${(item.growth * 100).toFixed(1)}% growth` : "—"}</span>
+                                        </div>
+                                        <div style={{ display: "grid", gap: "0.25rem", fontSize: "0.8rem", color: "#aaa" }}>
+                                          <span>EPS est: <strong style={{ color: "#e5e5e5" }}>{fmt(item.earningsEstimate?.avg)}</strong> <span style={{ color: "#555" }}>({fmt(item.earningsEstimate?.low)} – {fmt(item.earningsEstimate?.high)})</span></span>
+                                          <span>Rev est: <strong style={{ color: "#e5e5e5" }}>{fmtCompact(item.revenueEstimate?.avg)}</strong></span>
+                                          <span style={{ color: "#555" }}>{item.earningsEstimate?.numberOfAnalysts ?? "—"} analysts</span>
+                                        </div>
+                                      </div>
+                                    ))}
+                                  </div>
+                                </div>
+                              )}
+
+                              {/* Analyst upgrade/downgrade history */}
+                              {upgrades.length > 0 && (
+                                <div style={{ marginBottom: "1.25rem" }}>
+                                  <p className="detail-label" style={{ marginBottom: "0.6rem" }}>Recent Analyst Actions</p>
+                                  <div style={{ display: "grid", gap: "0.5rem" }}>
+                                    {upgrades.map((u, idx) => {
+                                      const actionColor = u.action === "up" ? "#4ade80" : u.action === "down" ? "#f87171" : "#facc15";
+                                      return (
+                                        <div key={idx} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: "0.75rem", flexWrap: "wrap", background: "#1a1a1a", border: "1px solid #2a2a2a", borderRadius: "8px", padding: "0.65rem 0.75rem" }}>
+                                          <div>
+                                            <strong style={{ fontSize: "0.85rem" }}>{u.firm ?? "Unknown"}</strong>
+                                            <p style={{ fontSize: "0.75rem", marginTop: "0.2rem" }}>
+                                              <span style={{ color: "#666" }}>{u.fromGrade ?? "—"}</span>
+                                              <span style={{ color: "#555" }}> → </span>
+                                              <span style={{ color: actionColor, fontWeight: 600 }}>{u.toGrade ?? "—"}</span>
+                                              {u.action && <span style={{ color: "#555" }}> ({u.action})</span>}
+                                            </p>
+                                          </div>
+                                          <span style={{ fontSize: "0.75rem", color: "#555" }}>{u.epochGradeDate ? fmtDate(u.epochGradeDate) : "—"}</span>
+                                        </div>
+                                      );
+                                    })}
+                                  </div>
+                                </div>
+                              )}
+
+                              {/* Insider + Institutional holders */}
+                              {(insiders.length > 0 || institutions.length > 0) && (
+                                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(280px, 1fr))", gap: "1rem" }}>
+                                  {insiders.length > 0 && (
+                                    <div>
+                                      <p className="detail-label" style={{ marginBottom: "0.6rem" }}>Recent Insider Holders</p>
+                                      <div style={{ display: "grid", gap: "0.5rem" }}>
+                                        {insiders.map((h, idx) => (
+                                          <div key={idx} style={{ background: "#1a1a1a", border: "1px solid #2a2a2a", borderRadius: "8px", padding: "0.65rem 0.75rem" }}>
+                                            <div style={{ display: "flex", justifyContent: "space-between", gap: "0.5rem" }}>
+                                              <strong style={{ fontSize: "0.85rem" }}>{h.name ?? "—"}</strong>
+                                              <span style={{ fontSize: "0.75rem", color: "#555" }}>{fmtDate(h.latestTransDate || h.positionDirectDate)}</span>
+                                            </div>
+                                            <p style={{ fontSize: "0.75rem", color: "#888", marginTop: "0.2rem" }}>{h.relation ?? h.transactionDescription ?? "Insider"}</p>
+                                            {h.shares != null && <p style={{ fontSize: "0.75rem", color: "#aaa", marginTop: "0.15rem" }}>Shares: {h.shares.toLocaleString()}</p>}
+                                          </div>
+                                        ))}
+                                      </div>
+                                    </div>
+                                  )}
+                                  {institutions.length > 0 && (
+                                    <div>
+                                      <p className="detail-label" style={{ marginBottom: "0.6rem" }}>Top Institutional Holders</p>
+                                      <div style={{ display: "grid", gap: "0.5rem" }}>
+                                        {institutions.map((inst, idx) => (
+                                          <div key={idx} style={{ background: "#1a1a1a", border: "1px solid #2a2a2a", borderRadius: "8px", padding: "0.65rem 0.75rem" }}>
+                                            <div style={{ display: "flex", justifyContent: "space-between", gap: "0.5rem" }}>
+                                              <strong style={{ fontSize: "0.85rem" }}>{inst.organization ?? "—"}</strong>
+                                              <span style={{ fontSize: "0.75rem", color: "#555" }}>{fmtDate(inst.reportDate)}</span>
+                                            </div>
+                                            <p style={{ fontSize: "0.75rem", color: "#aaa", marginTop: "0.2rem" }}>Position: {inst.position?.toLocaleString() ?? "—"}</p>
+                                            <p style={{ fontSize: "0.75rem", color: "#aaa", marginTop: "0.1rem" }}>Value: {fmtCompact(inst.value)}{inst.pctHeld ? ` · ${(inst.pctHeld * 100).toFixed(2)}% held` : ""}</p>
+                                          </div>
+                                        ))}
+                                      </div>
+                                    </div>
+                                  )}
+                                </div>
+                              )}
+                            </>)}
+                          </div>
+                        )}
+
+                        {/* ── CHART TAB ──────────────────────────────────────── */}
+                        {tab === "chart" && (
+                          <div>
+                            {chartLoading && !chartCache[chartKey] && <p style={{ color: "#555" }}>Loading chart…</p>}
+                            <SVGChart data={chartCache[chartKey] ?? []} period={period} onPeriodChange={(p) => changePeriod(s.id, s.symbol, p)} />
+                          </div>
+                        )}
+
+                        {/* ── PROFILE TAB ────────────────────────────────────── */}
+                        {tab === "profile" && (
+                          <div>
+                            {summaryLoading[s.id] && <p style={{ color: "#555" }}>Loading profile…</p>}
+                            {!summaryLoading[s.id] && ap && (
+                              <div>
+                                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", flexWrap: "wrap", gap: "0.5rem", marginBottom: "1rem" }}>
+                                  <div>
+                                    <p style={{ fontSize: "0.85rem", color: "#888" }}>Sector: <span style={{ color: "#e5e5e5" }}>{ap.sector ?? "—"}</span></p>
+                                    <p style={{ fontSize: "0.85rem", color: "#888", marginTop: "0.25rem" }}>Industry: <span style={{ color: "#e5e5e5" }}>{ap.industry ?? "—"}</span></p>
+                                    <p style={{ fontSize: "0.85rem", color: "#888", marginTop: "0.25rem" }}>Employees: <span style={{ color: "#e5e5e5" }}>{ap.fullTimeEmployees?.toLocaleString() ?? "—"}</span></p>
+                                    {ap.city && <p style={{ fontSize: "0.85rem", color: "#888", marginTop: "0.25rem" }}>📍 {[ap.city, ap.state, ap.country].filter(Boolean).join(", ")}</p>}
+                                  </div>
+                                  {ap.website && <a href={ap.website} target="_blank" rel="noopener noreferrer" style={{ color: "#3b82f6", fontSize: "0.85rem", textDecoration: "none" }}>🔗 {ap.website.replace(/^https?:\/\//, "")}</a>}
+                                </div>
+                                {ap.longBusinessSummary && (
+                                  <div>
+                                    <p className="detail-label" style={{ marginBottom: "0.5rem" }}>About</p>
+                                    <p style={{ fontSize: "0.875rem", color: "#aaa", lineHeight: 1.6 }}>{expandedDesc[s.id] ? ap.longBusinessSummary : ap.longBusinessSummary.slice(0, 300) + "…"}</p>
+                                    <button onClick={() => setExpandedDesc((p) => ({ ...p, [s.id]: !p[s.id] }))} style={{ background: "none", border: "none", color: "#3b82f6", cursor: "pointer", fontSize: "0.8rem", marginTop: "0.4rem", padding: 0 }}>
+                                      {expandedDesc[s.id] ? "Show less" : "Show more"}
+                                    </button>
+                                  </div>
+                                )}
+                              </div>
+                            )}
+                            {!summaryLoading[s.id] && !ap && <p style={{ color: "#555" }}>No profile data available.</p>}
+                          </div>
+                        )}
+
+                        {/* ── NEWS TAB ───────────────────────────────────────── */}
+                        {tab === "news" && (
+                          <div className="news-list">
+                            {newsLoading[s.id] && <p className="news-loading">Loading news…</p>}
+                            {!newsLoading[s.id] && (newsCache[s.id] ?? []).length === 0 && <p className="news-empty">No news found for {s.symbol}.</p>}
+                            {(newsCache[s.id] ?? []).map((item, i) => (
+                              <a key={i} href={item.link} target="_blank" rel="noopener noreferrer" className="news-item">
+                                {item.thumbnail && <img src={item.thumbnail} alt="" className="news-thumb" />}
+                                <div className="news-content">
+                                  <p className="news-title">{item.title}</p>
+                                  <p className="news-meta"><span className="news-publisher">{item.publisher}</span><span className="news-time">{timeAgo(item.publishedAt)}</span></p>
+                                </div>
+                              </a>
+                            ))}
+                          </div>
+                        )}
+
+                        <p style={{ color: "#444", fontSize: "0.75rem", marginTop: "1rem" }}>Click row again to collapse</p>
+                      </div>
+                    </td></tr>
+                  )}
+                </Fragment>
+              );
+            })}
+          </tbody>
+        </table>
+      )}
+    </main>
   );
 }
